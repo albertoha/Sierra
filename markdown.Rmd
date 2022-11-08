@@ -1,0 +1,301 @@
+---
+title: "Suicidio en la Sierra Tarahumara"
+author: "Alberto Hernández | Taller de Datos Nexos"
+date: "7/11/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = F, message = F)
+```
+
+##Suicidio en la Sierra Tarahumara
+
+Los datos se pueden descargar de:
+Mortalidad: https://www.inegi.org.mx/programas/mortalidad/#Microdatos
+
+Shapefiles de municipios: http://www.conabio.gob.mx/informacion/gis/ 
+
+
+
+```{r cars}
+#librerías
+library(tidyverse)
+library(foreign)
+library(stringr)
+
+#bases de datos
+#lectura de nombres de archivos en la carpeta
+l = list.files("E:/Defunciones/Mexico", full.names = T, recursive = T)
+#selección de archivos pertinentes
+a = grep("DEFUN|defun20", l, value = T)
+a = a[c(1:6,17:31)]
+#lectura
+def = lapply(a, read.dbf)
+
+#selección de columnas pertinentes
+#colu = c("SEXO", "EDAD", "ANIO_OCUR", "PRESUNTO",
+         #"ENT_OCURR", "MUN_OCURR", "LENGUA",
+         #"MES_OCURR", "DIA_OCURR")
+colu = c("SEXO", "EDAD", "ANIO_OCUR", "PRESUNTO",
+         "ENT_OCURR", "MUN_OCURR")
+fcolu = function(x){
+  x = x[,which( colnames(x) %in% colu )]
+}
+def2 = lapply(def, fcolu)
+#la base de 2011 no tiene la variable lengua indígena
+#ddef2[[7]]$LENGUA = NA
+#conversión de la lista a data.frame
+def0 = do.call(rbind.data.frame, def2)
+
+#lectura de proyecciones de población de CONAPO a nivel municipal
+conapo = read.csv("E:/PoblacionMunicipios90-30CONAPO/pobmunicipio90-30.csv")
+conapo$Code = str_pad(conapo$Code, width = 5, pad = "0", side = "left")
+conapo$ENT = substr(conapo$Code, 1, 2)
+
+
+#TENDENCIA GENERAL
+#poblacion general por año
+
+#población por sexo
+pobsex = conapo %>%
+  filter(Sex %in% c("Females", "Males"),
+         Year %in% c(2000:2020)) %>%
+  group_by(Sex, Year) %>%
+  summarise(pob = sum(Population))
+pobsex$SEXO = NA
+pobsex$SEXO[which(pobsex$Sex == "Females")] =  2
+pobsex$SEXO[which(pobsex$Sex == "Males")] =  1
+
+#suicidios por sexo
+ss = def0 %>%
+  filter(PRESUNTO == 3,
+         ANIO_OCUR %in% c(2000:2020),
+         SEXO %in% c(1,2)) %>%
+  group_by(ANIO_OCUR, SEXO) %>%
+  summarise(total = n())
+
+ss = ss %>%
+  left_join(pobsex, by = c("SEXO" = "SEXO", "ANIO_OCUR" = "Year"))
+ss$tasa = 100000*ss$total/ss$pob
+
+#total de población para la tasa general
+total = ss %>%
+  group_by(ANIO_OCUR) %>%
+  summarise(total = sum(total),
+            pob = sum(pob)) %>%
+  mutate(SEXO = rep(3))
+total$tasa = 100000*total$total/total$pob
+
+#unión con total de población
+ss = rbind(ss[,c("ANIO_OCUR", "SEXO", "total", "pob", "tasa")], total)
+
+#gráfica
+ss %>%
+  ggplot(aes(ANIO_OCUR, tasa, color = factor(SEXO))) + 
+  geom_line() + ylim(c(0,11)) + 
+  labs(color = "Sexo",
+       title = "Tasa de suicidio por cada 100 mil habitantes en México") +
+  ylab("") + xlab("") +
+  scale_x_continuous(breaks=c(2000:2020),
+                   labels=c(2000:2020)) +
+  scale_color_manual(labels=c('Masculino', 'Femenino', "General"),
+                     values = c("coral3", "coral", "black")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#GRÁFICA DE ESTADOS
+qt = def0 %>%
+  filter(PRESUNTO == 3,
+         ANIO_OCUR %in% c(2011:2020)) %>%
+  group_by(ENT_OCURR,ANIO_OCUR) %>%
+  summarise(total = n())
+
+pobqt = conapo %>%
+  filter(Sex == "Total",
+         Year %in% c(2011:2020)) %>%
+  group_by(ENT, Year) %>%
+  summarise(pob = sum(Population))
+qt = qt %>%
+  left_join(pobqt, by = c("ENT_OCURR" = "ENT",
+                          "ANIO_OCUR" = "Year")) %>%
+  filter(ENT_OCURR != "99")
+qt$tasa = 100000*qt$total/qt$pob
+
+
+#resaltamos los estados de interés
+estados = c("08", "01", "31", "23", "04", "26", "12")
+qt %>%
+  ggplot(aes(ANIO_OCUR, tasa, group = ENT_OCURR)) + 
+  geom_line(color = "gray", size = .6, alpha = .5) + 
+  geom_line(data = qt %>% filter(ENT_OCURR %in% estados),
+            aes(ANIO_OCUR, tasa, color = ENT_OCURR)) +
+  scale_color_discrete(name = "Estados", 
+    labels = c("Aguascalientes", "Campeche", "Chihuahua", 
+               "Guerrero", "Quintana Roo", "Sonora", "Yucatán")) +
+  labs(title = "Tasas de suicidio en estados de Mexico",
+       subtitel = "2011-2020") + 
+  xlab("") + ylab("tasa (por cada 100k)") +
+  scale_x_continuous(breaks=c(2011:2020),
+                     labels=c(2011:2020)) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#TASAS A NIVEL MUNICIPAL
+#librerías
+library(proj4)
+library(spdep)
+library(maptools)
+library(rgdal)
+
+#tabla de atributos
+mun = read.dbf("C:/Users/52551/Documents/SPM/EjerciciosGIS/Mexico4/muni_2018gw.dbf")
+
+#cálculo de tasas
+pmqt = conapo %>%
+  filter(Sex == "Total",
+         Year %in% c(2011:2020)) %>%
+  group_by(Year, Code) %>%
+  summarise(pob = sum(Population)) %>%
+  left_join(def0 %>%
+              filter(PRESUNTO == 3,
+                     ANIO_OCUR %in% c(2011:2020)) %>%
+              mutate(CVEGEO = paste(ENT_OCURR, MUN_OCURR, sep = "")) %>%
+              group_by(CVEGEO, ANIO_OCUR) %>%
+              summarise(total = n()), 
+            by = c("Code" = "CVEGEO", "Year" = "ANIO_OCUR")) %>%
+  group_by(Code) %>%
+  summarise(pob = sum(pob),
+            total = sum(total, na.rm = T)) %>%
+  mutate(tasa = 100000*total/pob) 
+
+mun = mun %>%
+  left_join(pmqt, by = c("CVEGEO" = "Code")) 
+
+#Suavizamiento espacial
+#Cálculo de Getis Ord Gi
+shapefile <-readShapePoly("C:/Users/52551/Documents/SPM/EjerciciosGIS/Mexico4/muni_2018gw.shp")
+proj4string(shapefile)<-CRS("+proj=longlat +init=epsg:4326")
+#shapefile_albers <-spTransform(shapefile, CRS("+init=ESRI:102003"))
+shapefile_df <- as(shapefile, "data.frame")
+shapefile_df[is.na(shapefile_df)] <-0
+coords <- coordinates(shapefile)
+IDs<-row.names(as(shapefile, "data.frame"))
+#definimos tamaño de vecindario
+knn50 <- knn2nb(knearneigh(coords, k = 20), row.names = IDs)
+knn50 <- include.self(knn50)
+#calculamos estadísticos
+localGvalues <- localG(x = as.numeric(shapefile_df$tasa_x), listw = nb2listw(knn50, style = "B"), zero.policy = TRUE)
+localGvalues <- round(localGvalues,3)
+new_df <- data.frame(shapefile_df)
+new_df$values <- localGvalues
+mun$lg = localGvalues
+#los mapas fueron producidos en QGIS
+write.dbf(mun, "C:/Users/52551/Documents/SPM/EjerciciosGIS/Mexico4/muni_2018gw.dbf")
+
+#SIERRA TARAHUMARA
+#vector con los municipios
+sierra = c("029", "046", "007", "027", "008", "065", "030", "047", "066", "020", "041", "009", "049", "012", "051", "053", "063")
+sierra = paste(rep("08", length(sierra)), sierra, sep = "")
+
+#general por año
+ssierra = def0 %>%
+  mutate(cvegeo = paste(ENT_OCURR, MUN_OCURR, sep = "")) %>%
+  filter(PRESUNTO == 3,
+         ANIO_OCUR %in% c(2011:2020),
+         cvegeo %in% sierra) %>%
+  group_by(ANIO_OCUR) %>%
+  summarise(total = n())
+
+
+pobsierra = conapo %>%
+  filter(Code %in% sierra,
+         Sex == "Total",
+         Year %in% c(2011:2020)) %>%
+  group_by(Year) %>%
+  summarise(pob = sum(Population))
+
+ssierra$pob = pobsierra$pob
+ssierra$tasa = 100000*ssierra$total/ssierra$pob
+ssierra$area = rep("Sierra Tarahumara") 
+
+nac = ss[which(ss$SEXO == 3 &
+           ss$ANIO_OCUR %in% c(2011:2020)),]
+nac$SEXO = rep("Nacional")
+colnames(nac)[2] = "area"
+ssierra = rbind(ssierra, nac)
+
+#gráfica comparativa
+ssierra %>%
+  ggplot(aes(ANIO_OCUR, tasa, color = area)) + 
+  geom_line(size = 2) +
+  ylim(c(0,35)) + xlab("") + 
+  scale_x_continuous(breaks=c(2011:2020),
+                     labels=c(2011:2020)) + 
+  labs(title = "Tasa de suicidio por cada 100 mil habitantes") +
+  scale_color_manual(values = c("black", "coral3")) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#hombres mujeres en la Sierra
+a = def0 %>% 
+  mutate(cvegeo = paste(ENT_OCURR, MUN_OCURR, sep = ""),
+         edad = as.numeric(substr(EDAD, 2,4))) %>%
+  filter(PRESUNTO == 3,
+         ANIO_OCUR %in% c(2011:2020),
+         cvegeo %in% sierra, 
+         edad < 100,
+         SEXO %in% c(1,2)) %>%
+  group_by(edad, SEXO) %>%
+  summarise(total = n()) 
+a$sexo = NA
+a$sexo[which(a$SEXO == 1)] = "HOMBRES"
+a$sexo[which(a$SEXO == 2)] = "MUJERES"
+  
+a %>%  
+  ggplot(aes(edad, total)) + 
+  geom_col( fill = "coral3") + 
+  facet_wrap(vars(sexo)) +
+  labs(title = "Muertes por suicidio en la Sierra Tarahumara",
+       subtitle = "2011-2020") +
+  scale_x_continuous(breaks=seq(0,100,10),
+                     labels=seq(0,100,10)) +
+  theme_bw()
+
+#densidad por edad
+b = def0 %>% 
+  mutate(cvegeo = paste(ENT_OCURR, MUN_OCURR, sep = ""),
+         edad = as.numeric(substr(EDAD, 2,4))) %>%
+  filter(PRESUNTO == 3,
+         ANIO_OCUR %in% c(2011:2020),
+         edad < 100,
+         SEXO %in% c(1,2)) 
+
+
+b$sexo = NA
+b$sexo[which(b$SEXO == 1)] = "HOMBRES"
+b$sexo[which(b$SEXO == 2)] = "MUJERES"
+
+b$area = rep("Nacional")
+b$area[which(b$cvegeo %in% sierra)] = "Sierra Tarahumara"
+
+b %>%  
+  ggplot(aes(edad, group = area, color = area)) + 
+  geom_density() + 
+  facet_wrap(vars(sexo)) +
+  labs(title = "Muertes por suicidio en México y la Sierra Tarahumara",
+       subtitle = "2011-2020") +
+  ylab("densidad") +
+  scale_x_continuous(breaks=seq(0,100,10),
+                     labels=seq(0,100,10)) +
+  scale_color_manual(
+                    labels=c('Nacional', 'Sierra Tarahumara'),
+                    values = c("black", "coral3")) +
+  theme_bw() + 
+  theme(legend.position = "bottom",
+        legend.title = element_blank())
+
+```
+
+
